@@ -1,0 +1,14 @@
+# Secrets: never commit your real keys
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Local data and logs
+data/
+logs/
+.DS_Store
+.pytest_cache/
