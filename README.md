@@ -2,7 +2,7 @@
 
 A Python bot that reads market news (and later, posts on X), works out which stocks or crypto a story affects, and paper-trades on it, with security and risk controls built in from day one.
 
-> **Status:** Week 1 of 10: broker connection, prices, paper orders and news ingestion.
+> **Status:** Week 3 of 10: news is stored in a database, matched to US/UK/crypto assets, and price-tracked after publication.
 > Paper trading only. Not financial advice.
 
 ## Why this project
@@ -23,7 +23,11 @@ news / X  ──► ingest ──► understand (NLP) ──► decide ──►
 | `config.py` | Loads keys from `.env`, blocks live trading unless explicitly allowed |
 | `broker.py` | Account, positions, orders (with a per-order dollar limit) |
 | `market_data.py` | Latest stock and crypto prices |
-| `news.py` | Alpaca news + RSS feeds, merged and de-duplicated |
+| `news.py` | Alpaca news + UK/crypto RSS feeds, merged and de-duplicated |
+| `watchlist.py` | The US, UK and crypto assets tracked, and the names that identify them |
+| `tagger.py` | Matches each headline to assets (source tags + names + $cashtags) |
+| `storage.py` | SQLite database of headlines and post-news price checks |
+| `collector.py` | Pipeline: fetch → tag → store → schedule price checks at +0/5/30/60 min |
 
 ## Setup
 1. Make a free account at [alpaca.markets](https://alpaca.markets), switch to **Paper Trading**, and generate API keys.
@@ -42,12 +46,15 @@ python scripts/check_account.py               # does my connection work?
 python scripts/get_prices.py AAPL BTC/USD     # latest prices
 python scripts/place_trade.py BTC/USD 50      # buy $50 of BTC (paper)
 python scripts/fetch_news.py TSLA             # recent headlines
+python scripts/collect.py --loop              # collect news + track prices (Ctrl+C to stop)
+python scripts/show_db.py                     # what's been collected so far
 pytest                                        # run the tests
 ```
 
 ## Roadmap
 - [x] Weeks 1–2: broker connection, prices, paper orders, news ingestion
-- [ ] Weeks 3–4: match headlines to tickers, store news in a database
+- [x] Week 3: match headlines to tickers (US, UK, crypto), SQLite storage, post-news price tracking
+- [ ] Week 4: Trading 212 demo as a UK broker, LSE RNS announcements
 - [ ] Weeks 5–6: sentiment and event classification (FinBERT / LLM)
 - [ ] Weeks 7–8: strategy and risk engine, autonomous paper trading
 - [ ] Weeks 9–10: backtesting, results dashboard, security threat model

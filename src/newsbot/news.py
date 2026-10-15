@@ -1,12 +1,14 @@
 """Collects headlines from two free sources and puts them in one common format.
 
 1. Alpaca's news API: already tagged with ticker symbols.
-2. RSS feeds: anything you like (BBC, CoinDesk, etc.). Not tagged, so the
-   "which stock is this about?" step comes later in the project.
+2. RSS feeds: US, UK and crypto outlets. Not tagged; tagger.py works out
+   which assets each story is about.
 
 Everything becomes a `Headline`, so later stages don't care where it came from.
+To add a source, add a feed below or write one new fetch_* function.
 """
 import hashlib
+import socket
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
@@ -17,9 +19,17 @@ from alpaca.data.requests import NewsRequest
 from newsbot.config import Settings
 
 DEFAULT_RSS_FEEDS = {
+    # UK
     "BBC Business": "https://feeds.bbci.co.uk/news/business/rss.xml",
+    "Guardian Business": "https://www.theguardian.com/uk/business/rss",
+    "Sky Business": "https://feeds.skynews.com/feeds/rss/business.xml",
+    # Crypto
     "CoinDesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
+    "Cointelegraph": "https://cointelegraph.com/rss",
 }
+
+# Never let one slow website freeze the whole bot.
+socket.setdefaulttimeout(15)
 
 
 @dataclass
@@ -60,7 +70,11 @@ def fetch_alpaca_news(settings: Settings, symbols: list[str] | None = None,
 def fetch_rss_news(feeds: dict[str, str] = DEFAULT_RSS_FEEDS) -> list[Headline]:
     headlines = []
     for name, url in feeds.items():
-        parsed = feedparser.parse(url)
+        try:
+            parsed = feedparser.parse(url)
+        except Exception as exc:  # a broken feed shouldn't stop the others
+            print(f"  [warn] {name} feed failed: {exc}")
+            continue
         for entry in parsed.entries:
             headlines.append(
                 Headline(
