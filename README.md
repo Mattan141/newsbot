@@ -2,7 +2,7 @@
 
 A Python bot that reads market news (and later, posts on X), works out which stocks or crypto a story affects, and paper-trades on it, with security and risk controls built in from day one.
 
-> **Status:** Week 3 of 10: news is stored in a database, matched to US/UK/crypto assets, and price-tracked after publication.
+> **Status:** Week 4 of 10: live news streaming and sentiment scoring (keywords, or FinBERT) measured against market-adjusted price moves.
 > Paper trading only. Not financial advice.
 
 ## Why this project
@@ -27,7 +27,9 @@ news / X  ──► ingest ──► understand (NLP) ──► decide ──►
 | `watchlist.py` | The US, UK and crypto assets tracked, and the names that identify them |
 | `tagger.py` | Matches each headline to assets (source tags + names + $cashtags) |
 | `storage.py` | SQLite database of headlines and post-news price checks |
-| `collector.py` | Pipeline: fetch → tag → store → schedule price checks at +0/5/30/60 min |
+| `collector.py` | Pipeline: fetch → tag → score → store → schedule price checks at +0/5/30/60 min (+ SPY/BTC benchmark) |
+| `sentiment.py` | Pluggable sentiment: keyword lexicon, or FinBERT if installed |
+| `news_stream.py` | Live Alpaca news over a websocket, in a background thread |
 
 ## Setup
 1. Make a free account at [alpaca.markets](https://alpaca.markets), switch to **Paper Trading**, and generate API keys.
@@ -39,6 +41,7 @@ news / X  ──► ingest ──► understand (NLP) ──► decide ──►
    pip install -r requirements.txt
    ```
 3. Copy `.env.example` to `.env` and paste your paper keys in.
+4. Optional, better sentiment (~1–1.5 GB): `pip install -r requirements-ml.txt`
 
 ## Run it
 ```bash
@@ -46,7 +49,8 @@ python scripts/check_account.py               # does my connection work?
 python scripts/get_prices.py AAPL BTC/USD     # latest prices
 python scripts/place_trade.py BTC/USD 50      # buy $50 of BTC (paper)
 python scripts/fetch_news.py TSLA             # recent headlines
-python scripts/collect.py --loop              # collect news + track prices (Ctrl+C to stop)
+python scripts/collect.py --loop              # live news + sentiment + price tracking (Ctrl+C to stop)
+python scripts/score_news.py --try "Apple beats estimates"   # test the sentiment model
 python scripts/show_db.py                     # what's been collected so far
 pytest                                        # run the tests
 ```
@@ -54,8 +58,9 @@ pytest                                        # run the tests
 ## Roadmap
 - [x] Weeks 1–2: broker connection, prices, paper orders, news ingestion
 - [x] Week 3: match headlines to tickers (US, UK, crypto), SQLite storage, post-news price tracking
-- [ ] Week 4: Trading 212 demo as a UK broker, LSE RNS announcements
-- [ ] Weeks 5–6: sentiment and event classification (FinBERT / LLM)
-- [ ] Weeks 7–8: strategy and risk engine, autonomous paper trading
+- [x] Week 3.5: market benchmark (abnormal returns), data-quality checks (after-hours quotes, wide spreads)
+- [x] Week 4: live news streaming, sentiment scoring (keywords / FinBERT)
+- [ ] Week 5: strategy and risk engine, autonomous paper trading
+- [ ] Week 6: Trading 212 demo as a UK broker, LSE RNS announcements
 - [ ] Weeks 9–10: backtesting, results dashboard, security threat model
 - [ ] Later: X/Twitter watchlist, spoofed-news detection

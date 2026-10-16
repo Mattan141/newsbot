@@ -197,3 +197,54 @@ def test_cleanup_marks_prices_outside_session_as_missed():
     session = {NOW.date(): (NOW - timedelta(hours=2), NOW + timedelta(minutes=2))}   # closes at 15:02
     assert invalidate_outside_session(store, session) == 2   # the +5 MSFT and SPY prices
     assert store.moves() == []
+
+
+# ---- sentiment -----------------------------------------------------------
+def test_keyword_sentiment_on_real_headlines():
+    from newsbot.sentiment import KeywordScorer
+    k = KeywordScorer()
+    assert k.score("Netflix to lay off 1,000 staff in steepest cuts since 2022").label == "negative"
+    assert k.score("Anavex Life Sciences Receives FDA Clearance to Proceed").label == "positive"
+    assert k.score("Interactive Brokers Q3 EPS $0.67 Misses $0.68 Estimate").label == "negative"
+    assert k.score("Bitcoin, ether slip and rebound").label == "neutral"     # mixed
+    assert k.score("Apple fails to beat estimates").label == "negative"      # negation
+    assert k.score("Fed holds meeting on Tuesday").label == "neutral"        # nothing to go on
+
+
+def test_finbert_scorer_with_fake_model():
+    from newsbot.sentiment import FinBertScorer
+    fake = lambda text: [[{"label": "positive", "score": 0.85}, {"label": "negative", "score": 0.05},
+                          {"label": "neutral", "score": 0.10}]]
+    s = FinBertScorer(pipeline=fake).score("Apple beats estimates")
+    assert (s.label, s.score, s.model) == ("positive", 0.8, "finbert")
+
+
+def test_sentiment_is_stored_and_reported_against_moves():
+    from newsbot.sentiment import KeywordScorer
+    store = Store(":memory:")
+    process_headlines(store, [[_h("Netflix to lay off 1,000 staff")]], NOW,
+                      us_market_open=True, scorer=KeywordScorer())
+    assert store.recent_tagged()[0]["sentiment"] == "negative"
+    run_price_checks(store, lambda s: {"NFLX": 100.0, "SPY": 500.0}, NOW)
+    run_price_checks(store, lambda s: {"NFLX": 99.0, "SPY": 497.0}, NOW + timedelta(minutes=5))
+    row = store.moves_by_sentiment()[0]
+    assert (row["sentiment"], row["horizon_min"], row["n"], row["avg_abnormal"]) == ("negative", 5, 1, -0.4)
+
+
+def test_score_existing_fills_in_old_headlines():
+    from newsbot.collector import score_existing
+    from newsbot.sentiment import KeywordScorer
+    store = Store(":memory:")
+    process_headlines(store, [[_h("Tesla recalls 50,000 cars")]], NOW, us_market_open=False)  # no scorer
+    assert store.recent_tagged()[0]["sentiment"] is None
+    assert score_existing(store, KeywordScorer()) == 1
+    assert store.recent_tagged()[0]["sentiment"] == "negative"
+
+
+def test_live_news_converts_alpaca_items():
+    from types import SimpleNamespace
+    from newsbot.news_stream import to_headline
+    item = SimpleNamespace(source="benzinga", headline="Nvidia surges", url=None,
+                           created_at=NOW, symbols=["NVDA"])
+    h = to_headline(item)
+    assert (h.title, h.symbols, h.source) == ("Nvidia surges", ["NVDA"], "Alpaca-live/benzinga")

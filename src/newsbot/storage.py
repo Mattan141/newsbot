@@ -34,7 +34,10 @@ CREATE TABLE IF NOT EXISTS headlines (
     url          TEXT,
     published_at TEXT NOT NULL,
     seen_at      TEXT NOT NULL,
-    symbols      TEXT NOT NULL DEFAULT ''
+    symbols      TEXT NOT NULL DEFAULT '',
+    sentiment       TEXT,      -- positive / negative / neutral
+    sentiment_score REAL,      -- -1 .. +1
+    sentiment_model TEXT       -- which scorer produced it
 );
 CREATE TABLE IF NOT EXISTS price_checks (
     uid         TEXT NOT NULL REFERENCES headlines(uid),
@@ -54,8 +57,11 @@ CREATE INDEX IF NOT EXISTS idx_checks_due ON price_checks(status, due_at);
 # Columns added after the first version. Databases created by the older code
 # get them added automatically (a tiny "schema migration").
 MIGRATIONS = {
-    "role": "ALTER TABLE price_checks ADD COLUMN role TEXT NOT NULL DEFAULT 'asset'",
-    "benchmark": "ALTER TABLE price_checks ADD COLUMN benchmark TEXT",
+    ("price_checks", "role"): "ALTER TABLE price_checks ADD COLUMN role TEXT NOT NULL DEFAULT 'asset'",
+    ("price_checks", "benchmark"): "ALTER TABLE price_checks ADD COLUMN benchmark TEXT",
+    ("headlines", "sentiment"): "ALTER TABLE headlines ADD COLUMN sentiment TEXT",
+    ("headlines", "sentiment_score"): "ALTER TABLE headlines ADD COLUMN sentiment_score REAL",
+    ("headlines", "sentiment_model"): "ALTER TABLE headlines ADD COLUMN sentiment_model TEXT",
 }
 
 
@@ -73,26 +79,33 @@ class Store:
         self.conn.executescript(SCHEMA)
 
     def _migrate(self) -> None:
-        exists = self.conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='price_checks'"
-        ).fetchone()
-        if not exists:
-            return  # brand-new database: SCHEMA creates everything
-        cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(price_checks)")}
-        for col, sql in MIGRATIONS.items():
+        for (table, col), sql in MIGRATIONS.items():
+            exists = self.conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+            if not exists:
+                continue  # brand-new database: SCHEMA creates everything
+            cols = {r["name"] for r in self.conn.execute(f"PRAGMA table_info({table})")}
             if col not in cols:
                 self.conn.execute(sql)
         self.conn.commit()
 
     # ---- headlines -------------------------------------------------------
-    def add_headline(self, h: Headline, symbols: list[str], seen_at: datetime) -> bool:
+    def add_headline(self, h: Headline, symbols: list[str], seen_at: datetime,
+                     sentiment=None) -> bool:
         """Insert a headline. Returns False if we've already stored it."""
         cur = self.conn.execute(
-            "INSERT OR IGNORE INTO headlines VALUES (?,?,?,?,?,?,?)",
-            (h.uid, h.source, h.title, h.url, _iso(h.published), _iso(seen_at), ",".join(symbols)),
+            "INSERT OR IGNORE INTO headlines (uid, source, title, url, published_at, seen_at, "
+            "symbols, sentiment, sentiment_score, sentiment_model) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (h.uid, h.source, h.title, h.url, _iso(h.published), _iso(seen_at), ",".join(symbols),
+             *((sentiment.label, sentiment.score, sentiment.model) if sentiment else (None,) * 3)),
         )
         self.conn.commit()
         return cur.rowcount == 1
+
+    def set_sentiment(self, uid: str, sentiment) -> None:
+        self.conn.execute(
+            "UPDATE headlines SET sentiment=?, sentiment_score=?, sentiment_model=? WHERE uid=?",
+            (sentiment.label, sentiment.score, sentiment.model, uid))
 
     # ---- price checks ----------------------------------------------------
     def schedule_checks(self, uid: str, symbols: list[str], seen_at: datetime,
@@ -184,7 +197,8 @@ class Store:
                  AND later.horizon_min > 0 AND later.status = 'done'
                 WHERE base.horizon_min = 0 AND base.status = 'done'
             )
-            SELECT h.title, h.source, a.symbol, a.horizon_min, a.benchmark,
+            SELECT h.title, h.source, h.sentiment, h.sentiment_score,
+                   a.symbol, a.horizon_min, a.benchmark,
                    ROUND(a.pct, 3)          AS pct,
                    ROUND(b.pct, 3)          AS bench_pct,
                    ROUND(a.pct - b.pct, 3)  AS abnormal_pct
@@ -219,6 +233,32 @@ class Store:
               ON b.uid = a.uid AND b.symbol = a.benchmark AND b.horizon_min = a.horizon_min
             WHERE a.role = 'asset'
             GROUP BY a.horizon_min ORDER BY a.horizon_min
+            """
+        ).fetchall()
+
+    def moves_by_sentiment(self) -> list[sqlite3.Row]:
+        """The key research table: after positive / negative / neutral news,
+        what was the average abnormal move? If sentiment is useful, positive
+        news should show a positive average and negative news a negative one."""
+        return self.conn.execute(
+            """
+            WITH pct AS (
+                SELECT base.uid, base.symbol, base.role, base.benchmark, later.horizon_min,
+                       100.0 * (later.price - base.price) / base.price AS pct
+                FROM price_checks base
+                JOIN price_checks later
+                  ON later.uid = base.uid AND later.symbol = base.symbol
+                 AND later.horizon_min > 0 AND later.status = 'done'
+                WHERE base.horizon_min = 0 AND base.status = 'done'
+            )
+            SELECT h.sentiment, a.horizon_min, COUNT(*) AS n,
+                   ROUND(AVG(a.pct - b.pct), 3) AS avg_abnormal
+            FROM pct a
+            JOIN pct b ON b.uid = a.uid AND b.symbol = a.benchmark AND b.horizon_min = a.horizon_min
+            JOIN headlines h ON h.uid = a.uid
+            WHERE a.role = 'asset' AND h.sentiment IS NOT NULL
+            GROUP BY h.sentiment, a.horizon_min
+            ORDER BY h.sentiment, a.horizon_min
             """
         ).fetchall()
 

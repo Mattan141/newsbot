@@ -1,0 +1,5 @@
+# Optional: the FinBERT sentiment model (~1-1.5 GB download in total).
+# Install with:  pip install -r requirements-ml.txt
+# The bot works without these, using the simpler keyword scorer.
+torch>=2.2
+transformers>=4.40

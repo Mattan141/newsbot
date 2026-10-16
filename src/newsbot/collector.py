@@ -34,6 +34,8 @@ class CollectResult:
     new: int = 0
     tagged: int = 0
     tracked: int = 0
+    positive: int = 0
+    negative: int = 0
 
 
 def trackable_symbols(symbols: list[str], us_market_open: bool) -> list[str]:
@@ -50,16 +52,21 @@ def trackable_symbols(symbols: list[str], us_market_open: bool) -> list[str]:
 
 
 def process_headlines(store: Store, batches: list[list[Headline]], now: datetime,
-                      us_market_open: bool) -> CollectResult:
+                      us_market_open: bool, scorer=None) -> CollectResult:
     headlines = merge_and_dedupe(*batches)
     result = CollectResult(fetched=len(headlines))
     for h in headlines:
+        if store.conn.execute("SELECT 1 FROM headlines WHERE uid=?", (h.uid,)).fetchone():
+            continue  # already stored on an earlier run (skip before the costly scoring)
         symbols = tag_headline(h)
-        if not store.add_headline(h, symbols, seen_at=now):
-            continue  # already stored on an earlier run
+        sentiment = scorer.score(h.title) if scorer else None
+        if not store.add_headline(h, symbols, seen_at=now, sentiment=sentiment):
+            continue
         result.new += 1
         if symbols:
             result.tagged += 1
+            if sentiment and sentiment.label in ("positive", "negative"):
+                setattr(result, sentiment.label, getattr(result, sentiment.label) + 1)
         if now - h.published <= FRESH_WINDOW and len(symbols) <= MAX_SYMBOLS_TO_TRACK:
             to_track = trackable_symbols(symbols, us_market_open)
             if to_track:
@@ -158,3 +165,13 @@ def invalidate_outside_session(store: Store, sessions: dict) -> int:
             fixed += 1
     store.conn.commit()
     return fixed
+
+
+def score_existing(store: Store, scorer, rescore: bool = False) -> int:
+    """Add sentiment to stored headlines that don't have one (or all, if rescore)."""
+    where = "" if rescore else "WHERE sentiment IS NULL"
+    rows = store.conn.execute(f"SELECT uid, title FROM headlines {where}").fetchall()
+    for row in rows:
+        store.set_sentiment(row["uid"], scorer.score(row["title"]))
+    store.conn.commit()
+    return len(rows)
